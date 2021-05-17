@@ -1,0 +1,222 @@
+---
+title: "analysis"
+author: "Harper Wallace"
+date: "5/1/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(metafor)
+
+df <- read.csv('/Users/harperwallace/Dropbox/ENS/LITREV/_writeup/Coding - data_grouped.csv')
+df <- df[df$unique_ID != '',]
+df$se_unadj       <- (df$ci95_upper_unadj - df$ci95_lower_unadj) / (2 * 1.96)
+df$lor_unadj      <- log(df$effect_unadj)
+df$se_lor_unadj   <- df$se_unadj / df$effect_unadj
+df$var_lor_unadj  <- (log(df$ci95_upper_unadj / df$effect_unadj) / 1.96)^2
+
+df$se_adj         <- (df$ci95_upper_adj   - df$ci95_lower_adj)   / (2 * 1.96)
+df$lor_adj        <- log(df$effect_adj)
+df$se_lor_adj     <- df$se_adj / df$effect_adj
+df$var_lor_adj    <- (log(df$ci95_upper_adj / df$effect_adj) / 1.96)^2
+
+# in the spreadsheet, CH entries are separated from AH entries
+# below, entries are repeated so that grouping by HE_group includes appropriate subsets
+df_ah <- df[df$HE_short == 'AH',]
+df_ch <- df[df$HE_short == 'CH',]
+ch_sub_ah <- df_ch[!df_ch$unique_ID %in% df_ah$unique_ID,]    # only if the study has not looked at AH and CH separately...
+df_ah <- rbind(df_ah, ch_sub_ah)                              # ...are CH results considered alongside AH results
+df_ah$HE_group <- 'auditory'
+df_ch$HE_group <- 'command'
+df_merged <- rbind(df_ah, df_ch)
+
+# # in the spreadsheet, suicide entries are separated from self-harm ones
+# # below, entries are repeated so that grouping by harm_group includes appropriate subsets
+# df_nasi <- df_merged[df_merged$harm_short == 'NASI',]
+# df_nssi <- df_merged[df_merged$harm_short == 'NSSI',]
+# df_sa <- df_merged[df_merged$harm_short == 'SA',]
+# 
+# sa_not_nssi <- df_sa[!df_sa$unique_ID %in% df_nssi$unique_ID,]
+# 
+# # only if the study has not looked at self-harm and suicide separately are suicide results considered alongside self-harm results
+# df_to_self <- rbind(df_nasi, sa_not_nssi)
+# df_to_self$harm_group <- 'to self'
+# 
+# df_suicide <- df_sa
+# df_suicide$harm_group <- 'suicide'
+# 
+# df_violence <- df_merged[df_merged$harm_short == 'V',]
+# df_violence$harm_group <- 'to other(s)'
+# 
+# df_merged <- rbind(df_to_self, df_suicide, df_violence)
+
+
+# # reorder harm_group factor levels: to self, suicide, to other(s)
+# df_merged <- within(df_merged, harm_group <- factor(harm_group, levels=names(sort(table(harm_group), decreasing=TRUE))))
+
+# look only at studies that reported unadjusted effect sizes
+df_merged <- df_merged[!is.na(df_merged$effect_unadj),]
+
+df_merged$harm_group = df_merged$harm_short
+```
+
+
+```{r, message=FALSE}
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+
+effect_by_moderator <- function(df, mod_name) {
+  # transforms: log odds ratio -> odds ratio
+  effects <- df %>%
+    group_by(harm_group, !!rlang::sym(mod_name)) %>%
+    do(res = rma(lor_unadj, var_lor_unadj, weights = n_total, method = 'REML', slab = paste(study_name, order), data = .)) %>%
+    mutate(effect = exp(res$beta), ci.lb = exp(res$ci.lb), ci.ub = exp(res$ci.ub), n=res$k)
+  colnames(effects)[2] <- 'moderator'
+  effects
+}
+
+plot_categorical_moderator <- function(df, mod_name) {
+  theme_set(theme_bw())
+  ggplot(df, aes(x = harm_group, y = effect, fill = moderator)) +
+    geom_bar(stat='identity', position='dodge') +
+    geom_errorbar(aes(ymin = ci.lb, ymax = ci.ub), width = 0.1, position = position_dodge(0.9)) +
+    geom_abline(slope = 0, intercept = 0, col = 'black', lty = 2) +
+    # geom_text(data = df, aes(label = paste('', n)), position = position_dodge(width = 0.9), hjust = 0, vjust = -0.25) +
+    labs(x = 'Type of harm', y = expression(Estimated~odds~ratio~(CI[95]))) +
+    scale_fill_manual(values = c("grey80", "grey40"), name = '') +
+    scale_y_log10() +
+    coord_cartesian(ylim = c(0.99, 11)) +
+    theme(legend.position = 'top',
+          legend.title = element_text(size=12),
+          legend.text = element_text(size=12),
+          axis.text = element_text(size=12),
+          axis.title.y = element_text(size=14, margin = margin(t = 0, r = 6, b = 0, l = 0)),
+          axis.title.x = element_text(size=12, margin = margin(t = 8, r = 0, b = 0, l = 0)),
+          axis.ticks = element_line(colour='black', size=0.2),
+          panel.grid.minor = element_blank(),
+          panel.grid.major.x = element_blank(),
+          panel.grid.minor.y = element_blank(),
+          panel.grid.major.y = element_blank(),
+          panel.background = element_rect(colour='black', size=0.8),
+          plot.margin = margin(0, 20, 5, 10))
+  width = 6.5
+  aspect_ratio = 1.3
+  ggsave(paste('../_plots/cat_mod_', mod_name, '.png', sep=''), width = width, height = width / aspect_ratio, units = "in")
+}
+```
+
+
+```{r}
+effects_HE <- effect_by_moderator(df_merged, 'HE_group')
+plot_categorical_moderator(effects_HE, 'HE_group')
+effects_HE
+
+effects_age <- effect_by_moderator(df_merged[df_merged$HE_group == 'auditory',], 'age_group')
+plot_categorical_moderator(effects_age, 'age_group')
+effects_age
+```
+
+
+```{r}
+plot_continuous_moderator <- function(df, mod_name, mod_name_pretty) {
+  p <- ggplot(df, aes(x = !!rlang::sym(mod_name), y = effect_unadj, colour = HE_group, size = n_total)) +
+    scale_fill_manual(values = c('grey80', 'grey50', 'grey20'), name = '') +
+    geom_point() +
+    facet_grid(cols = vars(harm_group)) +
+    geom_abline(slope = 0, intercept = 0, col = 'black', lty = 2) +
+    labs(x = mod_name_pretty, y = 'Odds ratio') +
+    scale_colour_manual(values = c("grey80", "grey40"), name = '') +
+    guides(size = FALSE) +
+    scale_y_log10() +
+    theme(legend.position = 'top',
+          legend.title = element_text(size=12),
+          legend.text = element_text(size=12),
+          axis.text = element_text(size=12),
+          axis.title.y = element_text(size=14, margin = margin(t = 0, r = 6, b = 0, l = 0)),
+          axis.title.x = element_text(size=12, margin = margin(t = 8, r = 0, b = 0, l = 0)),
+          axis.ticks = element_line(colour='black', size=0.2),
+          panel.grid.minor = element_blank(),
+          panel.grid.major.x = element_blank(),
+          panel.grid.minor.y = element_blank(),
+          panel.grid.major.y = element_blank())
+  if (mod_name == 'end') {
+    p <- p + scale_x_continuous(breaks = round(seq(2006, 2014, by = 4), 1))
+  }
+  width = 6.5
+  aspect_ratio = 1.8
+  ggsave(paste('../_plots/cont_mod_', mod_name, '.png', sep=''), width = width, height = width / aspect_ratio, units = "in")
+}
+```
+
+```{r}
+plot_continuous_moderator(df_merged, 'percent_male', 'Percent male')
+plot_continuous_moderator(df_merged, 'end', 'Study end year')
+```
+
+
+
+
+```{r}
+hierarchical_regressions <- function(df_sub) {
+  # print('model 1: type of hallucination (AH / CH)')
+  # rdm.rma <- rma(lor_unadj, var_lor_unadj, weights=n_total, method='REML', mods=~HE_short, data=df_sub)
+  # print(rdm.rma$pval[2])
+  
+  # print('model 2: age group (adult/adolescent)')
+  # rdm.rma <- rma(lor_unadj, var_lor_unadj, weights=n_total, method='REML', mods=~age_group, data=df_sub)
+  # print(rdm.rma$pval[2])
+  
+  print('model 3: mean age')
+  rdm.rma <- rma(lor_unadj, var_lor_unadj, weights=n_total, method='REML', mods=~age_mean, data=df_sub)
+  print(rdm.rma$pval[2])
+  
+  print('model 4: percent male')
+  rdm.rma <- rma(lor_unadj, var_lor_unadj, weights=n_total, method='REML', mods=~percent_male, data=df_sub)
+  print(rdm.rma$pval[2])
+  
+  print('model 5: study end year')
+  rdm.rma <- rma(lor_unadj, var_lor_unadj, weights=n_total, method='REML', mods=~end, data=df_sub)
+  print(rdm.rma$pval[2])
+  
+  print('model 6: data country')
+  rdm.rma <- rma(lor_unadj, var_lor_unadj, weights=n_total, method='REML', mods=~data_country, data=df_sub)
+  print(rdm.rma$pval[2])
+
+  # print('model 7: hallucination + age group + percent_male + age_group * percent_male + study end year')
+  # rdm.rma <- rma(lor_unadj, var_lor_unadj, weights=n_total, method='REML', mods=~HE_short + age_group + percent_male + age_group * percent_male, data=df_sub)
+  # summary(rdm.rma)
+}
+```
+
+
+hierarchical regression
+```{r}
+# HE_group == AH still includes AH and CH, just removes redundancy used above
+# NASI and NSSI do not have enough records for hierarchical regression
+
+hierarchical_regressions(df_merged[df_merged$HE_group == 'auditory' & df_merged$harm_group == 'SA',])
+hierarchical_regressions(df_merged[df_merged$HE_group == 'auditory' & df_merged$harm_group == 'V',])
+```
+
+
+
+```{r}
+df_sub = df_merged[df_merged$HE_group == 'auditory' & df_merged$harm_group == 'SA',]
+model <- rma(measure='OR', lor_unadj, var_lor_unadj, method='REML', slab=study_name, data=df_sub)
+funnel(model, atransf=exp)
+```
+
+```{r}
+df_sub = df_merged[df_merged$HE_group == 'auditory' & df_merged$harm_group == 'V',]
+model <- rma(measure='OR', lor_unadj, var_lor_unadj, method='REML', slab=study_name, data=df_sub)
+funnel(model, atransf=exp)
+```
+
+
+
+
